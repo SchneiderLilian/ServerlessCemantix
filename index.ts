@@ -10,18 +10,65 @@ function handlePreFlightRequest(): Response {
 
 async function handler(_req: Request): Promise<Response> {
   if (_req.method == "OPTIONS") {
-    handlePreFlightRequest();
+    return handlePreFlightRequest();
   }
 
   const headers = new Headers();
   headers.append("Content-Type", "application/json");
 
+  // Determine the user-provided word from the request URL or body.
+  // Support patterns like: /similarity/<word> or /api/similarity/<word>
+  // or query param ?word=...
+  let userWord: string | null = null;
+  try {
+    const url = new URL(_req.url);
+    const segments = url.pathname.split("/").filter(Boolean);
+
+    // find if there's a segment after 'similarity'
+    const simIndex = segments.findIndex((s) => s.toLowerCase() === "similarity");
+    if (simIndex >= 0 && segments.length > simIndex + 1) {
+      userWord = decodeURIComponent(segments[simIndex + 1]);
+    }
+
+    // fallback to query param
+    if (!userWord) {
+      const q = url.searchParams.get("word") || url.searchParams.get("w");
+      if (q) userWord = q;
+    }
+  } catch (e) {
+    // ignore URL parsing errors and try body below
+  }
+
+  // If not found in URL or query, try JSON body
+  if (!userWord) {
+    try {
+      const body = await _req.json();
+      if (body && typeof body === "object") {
+        if (body.word1) userWord = String(body.word1);
+        else if (body.word) userWord = String(body.word);
+      }
+    } catch (e) {
+      // parsing body failed - will error out below
+    }
+  }
+
+  if (!userWord) {
+    return new Response(JSON.stringify({ error: "No word provided in URL, query or body" }), {
+      status: 400,
+      headers: {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Headers": "content-type",
+      },
+    });
+  }
+
   const similarityRequestBody = JSON.stringify({
-    word1: "centrale",
-    word2: "supelec",
+    word1: userWord,
+    word2: "centrale",
   });
 
-  const requestOptions = {
+  const requestOptions: RequestInit = {
     method: "POST",
     headers: headers,
     body: similarityRequestBody,
@@ -56,7 +103,8 @@ async function handler(_req: Request): Promise<Response> {
     });
   } catch (error) {
     console.error("Fetch error:", error);
-    return new Response(`Error: ${error.message}`, { status: 500 });
+    const msg = error instanceof Error ? error.message : String(error);
+    return new Response(`Error: ${msg}`, { status: 500 });
   }
 }
 
